@@ -27,7 +27,7 @@ find_longest_match (PBYTE window, DWORD win_pos, DWORD win_len,
     }
   *out_dist = best_dist;
   *out_len = best_len;
-  return best_len >= 3;		// Minimum match length for efficiency
+  return best_len >= 3;
 }
 
 DWORD

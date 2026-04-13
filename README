@@ -1,2 +1,7 @@
 # MZ77
 LZ77 archiver software
+
+on debian-based distros install libgtk-4-dev pkg-config for GTK4. On other
+distros, good luck.
+
+Building steps described in INSTALL file.
