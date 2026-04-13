@@ -6,7 +6,7 @@
 #include "dt.h"
 #include "BitWriter.h"
 
-DWORD
+static DWORD
 find_longest_match (PBYTE window, DWORD win_pos, DWORD win_len,
 		    PBYTE lookahead, DWORD lookahead_len,
 		    PDWORD out_dist, PDWORD out_len)
@@ -37,9 +37,9 @@ compress (STR input_path, STR output_path)
   if (!input_fd)
     return ENOENT;
   FD output_fd = fopen (output_path, "wb");
-  BYTE window[WINDOW_SIZE];
+  static BYTE window[WINDOW_SIZE];
   (void) memset (window, 0, WINDOW_SIZE);
-  BitWriter bw;
+  BitWriter bw = { 0 };
   BitWriter_init (&bw, output_fd);
   DWORD window_filled = 0;
   BYTE LookAhead[256];
@@ -58,19 +58,15 @@ compress (STR input_path, STR output_path)
 	}
       else
 	{
-	  BitWriter_write (&bw, 0, 1);	// No match
+	  BitWriter_write (&bw, 0, 1);
 	  BitWriter_write (&bw, LookAhead[0], 8);
 	  length = 1;
 	}
-      // Update sliding window
-      DWORD shift = (window_filled + length) % WINDOW_SIZE;
       for (DWORD i = 0; i < length; i++)
 	window[(window_filled + i) % WINDOW_SIZE] = LookAhead[i];
-      window_filled = shift;
-      // Shift lookahead buffer
+      window_filled = (window_filled + length) % WINDOW_SIZE;
       memmove (LookAhead, LookAhead + length, LookAheadLength - length);
       LookAheadLength -= length;
-      // Refill lookahead
       if (LookAheadLength < sizeof (LookAhead))
 	{
 	  DWORD read = fread (LookAhead + LookAheadLength, 1,
@@ -78,7 +74,6 @@ compress (STR input_path, STR output_path)
 	  LookAheadLength += read;
 	}
     }
-  BitWriter_write (&bw, 1, 1);	// End Marker
   BitWriter_finish (&bw);
   fclose (input_fd);
   fclose (output_fd);

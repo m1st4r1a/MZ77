@@ -1,5 +1,4 @@
 #include "dt.h"
-#include "BitWriter.h"
 
 void
 BitWriter_init (BitWriter *bw, FD fd)
@@ -15,6 +14,7 @@ BitWriter_flush (BitWriter *bw)
     {
       BYTE byte = (bw->buffer >> (bw->bits_in_buffer - 8)) & 0xFF;
       fputc (byte, bw->fd);
+      bw->bits_in_buffer -= 8;
     }
 }
 
