@@ -1,8 +1,8 @@
-#include<stdlib.h>
-#include<string.h>
-#include<stdio.h>
-#include<stdbool.h>
-#include<errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <errno.h>
 #include "dt.h"
 #include "BitReader.h"
 
@@ -18,16 +18,20 @@ decompress (STR input_path, STR output_path)
       fclose (in);
       return ENOENT;
     }
+
   static BYTE window[WINDOW_SIZE] = { 0 };
   DWORD win_pos = 0;
+
   BitReader br;
   BitReader_init (&br, in);
+
   while (true)
     {
       int flag = BitReader_read (&br, 1);
       if (flag == -1)
 	break;
-      if (flag == 0)		// literal
+
+      if (flag == 0)
 	{
 	  int lit = BitReader_read (&br, 8);
 	  if (lit == -1)
@@ -38,13 +42,15 @@ decompress (STR input_path, STR output_path)
 	}
       else
 	{
-	  int dist_enc = BitReader_read (&br, 12);
-	  int len_enc = BitReader_read (&br, 8);
-	  if (dist_enc == -1 || len_enc == -1)
+	  int d_enc = BitReader_read (&br, 12);
+	  int l_enc = BitReader_read (&br, 8);
+	  if (d_enc == -1 || l_enc == -1)
 	    break;
-	  DWORD dist = (DWORD) dist_enc + 1;
-	  DWORD len = (DWORD) len_enc + 1;
-	  DWORD src = (win_pos - dist) % WINDOW_SIZE;
+
+	  DWORD dist = (DWORD) d_enc + 1;
+	  DWORD len = (DWORD) l_enc + 1;
+	  DWORD src = (win_pos + WINDOW_SIZE - dist) % WINDOW_SIZE;
+
 	  for (DWORD i = 0; i < len; i++)
 	    {
 	      BYTE b = window[(src + i) % WINDOW_SIZE];
@@ -54,6 +60,7 @@ decompress (STR input_path, STR output_path)
 	  win_pos += len;
 	}
     }
-  fclose (in), fclose (out);
+  fclose (in);
+  fclose (out);
   return EXIT_SUCCESS;
 }

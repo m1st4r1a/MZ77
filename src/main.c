@@ -4,10 +4,12 @@
 #include <string.h>
 #include <limits.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <gtk/gtk.h>
 #include <glib.h>
 #include "dt.h"
+#include "queue.h"
 #include "compress.h"
 #include "decompress.h"
 
@@ -15,9 +17,13 @@ static gboolean
 ui_update (gpointer d)
 {
   AppData *a = d;
-  gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (a->progress),
-				 (double) atomic_load (&a->progress_pct) /
-				 100.0);
+  int total = atomic_load (&a->total);
+  int done = atomic_load (&a->completed);
+  double frac = (total > 0) ? (double) done / total : 0.0;
+  char txt[32];
+  snprintf (txt, sizeof (txt), "%d / %d", done, total);
+  gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (a->progress), frac);
+  gtk_progress_bar_set_text (GTK_PROGRESS_BAR (a->progress), txt);
   return G_SOURCE_REMOVE;
 }
 
@@ -25,55 +31,44 @@ static void
 set_state (AppData *a, gboolean run, const char *t)
 {
   atomic_store (&a->busy, run);
-  gtk_widget_set_sensitive (a->run_btn, !run);
+  gtk_widget_set_sensitive (a->start_btn, !run);
   gtk_label_set_text (GTK_LABEL (a->status), t);
 }
-
-static gboolean
-on_mode_toggle (GtkSwitch *sw, gboolean state, gpointer data)
-{
-  (void) sw;
-  GtkLabel *lbl = GTK_LABEL (data);
-  gtk_label_set_text (lbl, state ? "Mode: compress" : "Mode: decompress");
-  return false;
-}
-
 
 static void *
 worker (void *d)
 {
   AppData *a = d;
-  gboolean is_compress = gtk_switch_get_active (GTK_SWITCH (a->mode_switch));
-  const char *action = is_compress ? "Compressing..." : "Decompressing...";
-  set_state (a, TRUE, action);
-  atomic_store (&a->progress_pct, 0);
-  g_idle_add (ui_update, a);
-  for (int i = 0; i <= 100; i += 5)
+  set_state (a, true, "Working...");
+  atomic_store (&a->completed, 0);
+  TaskItem task;
+  while (queue_pop (&a->queue, &task))
     {
-      atomic_store (&a->progress_pct, i);
+      task.status = STATUS_RUNNING;
+      DWORD res;
+      if (task.mode == MODE_COMPRESS)
+	res = compress (task.data.paths.in_path, task.data.paths.out_path);
+      else
+	res = decompress (task.data.paths.in_path, task.data.paths.out_path);
+      task.status = (res == EXIT_SUCCESS) ? STATUS_DONE : STATUS_ERROR;
+      atomic_fetch_add (&a->completed, 1);
       g_idle_add (ui_update, a);
-      g_usleep (20000);
+      if (atomic_load (&a->completed) >= atomic_load (&a->total))
+	break;
     }
-  DWORD res;
-  if (is_compress)
-    res = compress (a->in_path, a->out_path);
-  else
-    res = decompress (a->in_path, a->out_path);
-  atomic_store (&a->progress_pct, 100);
-  g_idle_add (ui_update, a);
-  set_state (a, FALSE, res == EXIT_SUCCESS ? "Done" : "Fail");
+  set_state (a, false, "Done");
   return NULL;
 }
 
 static void
-on_run (GtkButton *btn, AppData *a)
+on_start (GtkButton *btn, AppData *a)
 {
   (void) btn;
   if (atomic_load (&a->busy))
     return;
-  if (!a->in_path[0] || !a->out_path[0])
+  if (atomic_load (&a->total) == 0)
     {
-      set_state (a, FALSE, "⚠️ Select both paths");
+      set_state (a, FALSE, "Add files to queue");
       return;
     }
   pthread_t tid;
@@ -82,65 +77,71 @@ on_run (GtkButton *btn, AppData *a)
 }
 
 static void
-on_picked (GObject *src, GAsyncResult *res, gpointer d)
+on_picked_multiple (GObject *src, GAsyncResult *res, gpointer user_data)
 {
-  PickerData *pd = d;
-  if (!pd)
-    return;
+  AppData *a = (AppData *) user_data;
   GError *err = NULL;
-  GFile *file = pd->is_input
-    ? gtk_file_dialog_open_finish (GTK_FILE_DIALOG (src), res, &err)
-    : gtk_file_dialog_save_finish (GTK_FILE_DIALOG (src), res, &err);
-  if (file)
+  GListModel *files =
+    gtk_file_dialog_open_multiple_finish (GTK_FILE_DIALOG (src), res, &err);
+  if (!files || err)
     {
-      char *path = g_file_get_path (file);
+      g_clear_error (&err);
+      return;
+    }
+  gboolean is_comp = gtk_switch_get_active (GTK_SWITCH (a->mode_switch));
+  enum Mode mode = is_comp ? MODE_COMPRESS : MODE_DECOMPRESS;
+  guint count = g_list_model_get_n_items (files);
+  for (guint i = 0; i < count; i++)
+    {
+      GFile *f = G_FILE (g_list_model_get_item (files, i));
+      char *path = g_file_get_path (f);
       if (path)
 	{
-	  if (pd->is_input)
-	    {
-	      g_strlcpy (pd->app->in_path, path, PATH_MAX);
-	      gtk_label_set_text (GTK_LABEL (pd->app->in_label), path);
-	    }
-	  else
-	    {
-	      g_strlcpy (pd->app->out_path, path, PATH_MAX);
-	      gtk_label_set_text (GTK_LABEL (pd->app->out_label), path);
-	    }
+	  TaskItem task = {.mode = mode,.status = STATUS_PENDING };
+	  g_strlcpy (task.data.paths.in_path, path, PATH_MAX);
+	  char *base = g_path_get_basename (path);
+	  snprintf (task.data.paths.out_path, PATH_MAX, "%s/%s.lz77",
+		    g_get_home_dir (), base);
+	  g_free (base);
+	  queue_push (&a->queue, &task);
+	  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+	  gtk_box_append (GTK_BOX (row), gtk_label_new (path));
+	  gtk_box_append (GTK_BOX (row), gtk_label_new ("Wait"));
+	  gtk_list_box_insert (GTK_LIST_BOX (a->list_box), row, -1);
+	  gtk_widget_set_visible (row, TRUE);
 	  g_free (path);
 	}
-      g_object_unref (file);
+      g_object_unref (f);
     }
-  else if (err)
-    {
-      g_printerr ("Dialog error: %s\n", err->message);
-      g_error_free (err);
-    }
-  g_free (pd);
+  atomic_store (&a->total, count);
+  g_idle_add (ui_update, a);
+  g_object_unref (files);
 }
 
 static void
-on_pick (GtkButton *btn, PickerData *pd)
+on_add_files (GtkButton *btn, AppData *a)
 {
   (void) btn;
+  GtkWindow *win = GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (btn)));
   GtkFileDialog *dlg = gtk_file_dialog_new ();
-  if (pd->is_input)
-    {
-      gtk_file_dialog_set_title (dlg, "Select Input");
-      gtk_file_dialog_open (dlg, pd->win, NULL, on_picked, pd);
-    }
-  else
-    {
-      gtk_file_dialog_set_title (dlg, "Select Output");
-      gtk_file_dialog_set_initial_name (dlg, "output.lz77");
-      gtk_file_dialog_save (dlg, pd->win, NULL, on_picked, pd);
-    }
+  gtk_file_dialog_set_title (dlg, "Select files");
+  gtk_file_dialog_open_multiple (dlg, win, NULL, on_picked_multiple, a);
+}
+
+static void
+on_mode_toggle (GtkSwitch *sw, gboolean state, AppData *a)
+{
+  (void) sw;
+  gtk_label_set_text (GTK_LABEL (a->mode_label),
+		      state ? "Mode: deflate" : "Mode: decompress");
 }
 
 static gboolean
-on_close (GtkWindow *w, gpointer d)
+on_close (GtkWindow *w, AppData *a)
 {
   (void) w;
-  g_main_loop_quit ((GMainLoop *) d);
+  queue_shutdown (&a->queue);
+  g_main_loop_quit ((GMainLoop *) a->loop);
   return FALSE;
 }
 
@@ -149,59 +150,43 @@ main (void)
 {
   gtk_init ();
   AppData app = { 0 };
-  GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  app.loop = g_main_loop_new (NULL, FALSE);
+  queue_init (&app.queue);
   GtkWidget *win = gtk_window_new ();
   gtk_window_set_title (GTK_WINDOW (win), "MZ77 Archiver");
-  gtk_window_set_default_size (GTK_WINDOW (win), 400, 320);
-  g_signal_connect (win, "close-request", G_CALLBACK (on_close), loop);
+  gtk_window_set_default_size (GTK_WINDOW (win), 440, 380);
+  g_signal_connect (win, "close-request", G_CALLBACK (on_close), &app);
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 10);
   gtk_widget_set_margin_start (box, 15);
   gtk_widget_set_margin_end (box, 15);
   gtk_widget_set_margin_top (box, 15);
   gtk_widget_set_margin_bottom (box, 15);
   gtk_window_set_child (GTK_WINDOW (win), box);
-  app.in_label = gtk_label_new ("No input selected");
-  GtkWidget *ib = gtk_button_new_with_label ("Pick Input");
-  GtkWidget *ir = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
-  gtk_box_append (GTK_BOX (ir), app.in_label);
-  gtk_box_append (GTK_BOX (ir), ib);
-  gtk_widget_set_hexpand (app.in_label, TRUE);
-  PickerData *pi = g_new0 (PickerData, 1);
-  pi->app = &app;
-  pi->win = GTK_WINDOW (win);
-  pi->is_input = TRUE;
-  g_signal_connect (ib, "clicked", G_CALLBACK (on_pick), pi);
-  app.out_label = gtk_label_new ("No output selected");
-  GtkWidget *ob = gtk_button_new_with_label ("Pick Output");
-  GtkWidget *or = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
-  gtk_box_append (GTK_BOX (or), app.out_label);
-  gtk_box_append (GTK_BOX (or), ob);
-  gtk_widget_set_hexpand (app.out_label, TRUE);
-  PickerData *po = g_new0 (PickerData, 1);
-  po->app = &app;
-  po->win = GTK_WINDOW (win);
-  po->is_input = FALSE;
-  g_signal_connect (ob, "clicked", G_CALLBACK (on_pick), po);
-  app.mode_label = gtk_label_new ("Mode: Decompress");
+  app.list_box = gtk_list_box_new ();
+  gtk_widget_set_vexpand (app.list_box, TRUE);
+  gtk_box_append (GTK_BOX (box), app.list_box);
+  app.mode_label = gtk_label_new ("Mode: decompress");
   app.mode_switch = gtk_switch_new ();
-  GtkWidget *mr = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
-  gtk_widget_set_halign (app.mode_label, GTK_ALIGN_START);
+  GtkWidget *mr = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   gtk_box_append (GTK_BOX (mr), app.mode_label);
   gtk_box_append (GTK_BOX (mr), app.mode_switch);
+  gtk_widget_set_halign (app.mode_label, GTK_ALIGN_START);
   g_signal_connect (app.mode_switch, "state-set", G_CALLBACK (on_mode_toggle),
-		    app.mode_label);
+		    &app);
+  GtkWidget *add_btn = gtk_button_new_with_label ("Add files");
+  g_signal_connect (add_btn, "clicked", G_CALLBACK (on_add_files), &app);
   app.progress = gtk_progress_bar_new ();
-  app.status = gtk_label_new ("Ready");
-  app.run_btn = gtk_button_new_with_label ("Start");
-  g_signal_connect (app.run_btn, "clicked", G_CALLBACK (on_run), &app);
-  gtk_box_append (GTK_BOX (box), ir);
-  gtk_box_append (GTK_BOX (box), or);
+  app.status = gtk_label_new ("Waiting for files");
+  app.start_btn = gtk_button_new_with_label ("Start");
+  g_signal_connect (app.start_btn, "clicked", G_CALLBACK (on_start), &app);
   gtk_box_append (GTK_BOX (box), mr);
+  gtk_box_append (GTK_BOX (box), add_btn);
   gtk_box_append (GTK_BOX (box), app.progress);
   gtk_box_append (GTK_BOX (box), app.status);
-  gtk_box_append (GTK_BOX (box), app.run_btn);
+  gtk_box_append (GTK_BOX (box), app.start_btn);
   gtk_window_present (GTK_WINDOW (win));
-  g_main_loop_run (loop);
-  g_main_loop_unref (loop);
+  g_main_loop_run (app.loop);
+  g_main_loop_unref (app.loop);
+  queue_destroy (&app.queue);
   return EXIT_SUCCESS;
 }
