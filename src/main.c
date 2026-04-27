@@ -112,8 +112,17 @@ on_picked_multiple (GObject *src, GAsyncResult *res, gpointer user_data)
 	    (a->out_dir[0] != '\0') ? a->out_dir : g_get_home_dir ();
 	  char *tmp_path = g_build_filename (target_dir, base, NULL);
 	  g_strlcpy (task.data.paths.out_path, tmp_path, PATH_MAX);
-	  g_strlcat (task.data.paths.out_path, ".lz77", PATH_MAX);
 	  g_free (tmp_path);
+	  if (mode == MODE_COMPRESS)
+	    g_strlcat (task.data.paths.out_path, ".lz77", PATH_MAX);
+	  else
+	    {
+	      size_t len = strlen (task.data.paths.out_path);
+	      if (len > 5
+		  && strcmp (task.data.paths.out_path + len - 5,
+			     ".lz77") == 0)
+		task.data.paths.out_path[len - 5] = '\0';
+	    }
 	  g_free (base);
 	  queue_push (&a->queue, &task);
 	  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
