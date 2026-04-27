@@ -37,7 +37,6 @@ find_match (LZHashTable *ht, PBYTE window, DWORD win_pos,
 	}
       node = node->next;
     }
-
   *out_len = best_len;
   *out_dist = best_dist;
   return best_len >= 3;
@@ -46,7 +45,6 @@ find_match (LZHashTable *ht, PBYTE window, DWORD win_pos,
 DWORD
 compress (STR input_path, STR output_path)
 {
-  /* Fixed: Removed trailing spaces in mode strings */
   FD in = fopen (input_path, "rb");
   if (!in)
     return ENOENT;
@@ -56,26 +54,19 @@ compress (STR input_path, STR output_path)
       fclose (in);
       return ENOENT;
     }
-
-  /* Use static to prevent stack overflow */
   static BYTE window[WINDOW_SIZE] = { 0 };
   LZHashTable ht;
   HashTable_init (&ht);
-
   BitWriter bw;
   BitWriter_init (&bw, out);
-
   DWORD win_pos = 0;
   BYTE lookahead[256];
-  /* Read initial buffer */
   DWORD la_len = fread (lookahead, 1, sizeof (lookahead), in);
-
   while (la_len > 0)
     {
       DWORD dist = 0, len = 0;
       bool is_match =
 	find_match (&ht, window, win_pos, lookahead, la_len, &dist, &len);
-
       if (is_match)
 	{
 	  BitWriter_write (&bw, 1, 1);
@@ -88,26 +79,15 @@ compress (STR input_path, STR output_path)
 	  BitWriter_write (&bw, lookahead[0], 8);
 	  len = 1;
 	}
-
-      /* 1. Update Sliding Window */
-      /* 2. Update Hash Table (Only if enough bytes remain to form a 3-byte hash) */
       for (DWORD i = 0; i < len; i++)
 	{
 	  window[(win_pos + i) % WINDOW_SIZE] = lookahead[i];
-
-	  /* SAFE BOUNDS CHECK: Ensure lookahead has at least 3 bytes starting from i */
 	  if (la_len > i + 2)
-	    {
-	      HashTable_insert (&ht, hash_bytes (&lookahead[i]), win_pos + i);
-	    }
+	    HashTable_insert (&ht, hash_bytes (&lookahead[i]), win_pos + i);
 	}
       win_pos = (win_pos + len) % WINDOW_SIZE;
-
-      /* Shift lookahead buffer */
       memmove (lookahead, lookahead + len, la_len - len);
       la_len -= len;
-
-      /* Refill lookahead */
       if (la_len < sizeof (lookahead))
 	{
 	  DWORD rd =
@@ -116,7 +96,7 @@ compress (STR input_path, STR output_path)
 	}
     }
   BitWriter_finish (&bw);
-  HashTable_clear (&ht);	/* Free hash table nodes */
+  HashTable_clear (&ht);
   fclose (in);
   fclose (out);
   return EXIT_SUCCESS;
