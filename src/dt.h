@@ -60,12 +60,13 @@ typedef struct {
 } BitReader;
 typedef struct
 {
-  GtkWidget *list_box, *progress, *status, *start_btn, *mode_switch,
-    *mode_label;
-  GMainLoop *loop;
-  atomic_int busy, completed, total;
-  TaskQueue queue;
-  atomic_bool existing;
+    GtkWidget *list_box, *progress, *status, *start_btn, *mode_switch,
+              *mode_label, *out_dir_label, *out_dir_btn;
+    GMainLoop *loop;
+    atomic_int busy, completed, total;
+    TaskQueue queue;
+    atomic_bool existing;
+    char out_dir[PATH_MAX];  // <-- ADD THIS
 } AppData;
 typedef struct {
     AppData *app;

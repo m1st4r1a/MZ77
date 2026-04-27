@@ -108,8 +108,12 @@ on_picked_multiple (GObject *src, GAsyncResult *res, gpointer user_data)
 	  TaskItem task = {.mode = mode,.status = STATUS_PENDING };
 	  g_strlcpy (task.data.paths.in_path, path, PATH_MAX);
 	  char *base = g_path_get_basename (path);
-	  snprintf (task.data.paths.out_path, PATH_MAX, "%s/%s.lz77",
-		    g_get_home_dir (), base);
+	  const char *target_dir =
+	    (a->out_dir[0] != '\0') ? a->out_dir : g_get_home_dir ();
+	  char *tmp_path = g_build_filename (target_dir, base, NULL);
+	  g_strlcpy (task.data.paths.out_path, tmp_path, PATH_MAX);
+	  g_strlcat (task.data.paths.out_path, ".lz77", PATH_MAX);
+	  g_free (tmp_path);
 	  g_free (base);
 	  queue_push (&a->queue, &task);
 	  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
@@ -124,6 +128,40 @@ on_picked_multiple (GObject *src, GAsyncResult *res, gpointer user_data)
   atomic_store (&a->total, count);
   g_idle_add (ui_update, a);
   g_object_unref (files);
+}
+
+static void
+on_picked_output_dir (GObject *src, GAsyncResult *res, gpointer user_data)
+{
+  AppData *a = (AppData *) user_data;
+  GError *err = NULL;
+  GFile *folder =
+    gtk_file_dialog_select_folder_finish (GTK_FILE_DIALOG (src), res, &err);
+
+  if (!folder || err)
+    {
+      g_clear_error (&err);
+      return;
+    }
+
+  char *path = g_file_get_path (folder);
+  if (path)
+    {
+      g_strlcpy (a->out_dir, path, PATH_MAX);
+      gtk_label_set_text (GTK_LABEL (a->out_dir_label), path);
+      g_free (path);
+    }
+  g_object_unref (folder);
+}
+
+static void
+on_select_output_dir (GtkButton *btn, AppData *a)
+{
+  (void) btn;
+  GtkWindow *win = GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (btn)));
+  GtkFileDialog *dlg = gtk_file_dialog_new ();
+  gtk_file_dialog_set_title (dlg, "Select Output Directory");
+  gtk_file_dialog_select_folder (dlg, win, NULL, on_picked_output_dir, a);
 }
 
 static void
@@ -159,6 +197,7 @@ main (void)
   gtk_init ();
   AppData app = { 0 };
   app.loop = g_main_loop_new (NULL, FALSE);
+  g_strlcpy (app.out_dir, g_get_home_dir (), PATH_MAX);
   queue_init (&app.queue);
   GtkWidget *win = gtk_window_new ();
   gtk_window_set_title (GTK_WINDOW (win), "MZ77 Archiver");
@@ -186,12 +225,26 @@ main (void)
   app.progress = gtk_progress_bar_new ();
   app.status = gtk_label_new ("Waiting for files");
   app.start_btn = gtk_button_new_with_label ("Start");
+  app.out_dir_label = gtk_label_new (app.out_dir);
+  app.out_dir_btn = gtk_button_new_with_label ("Set Output Directory");
+  g_signal_connect (app.out_dir_btn, "clicked",
+		    G_CALLBACK (on_select_output_dir), &app);
+
+  GtkWidget *dir_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_box_append (GTK_BOX (dir_box), gtk_label_new ("Save to:"));
+  gtk_box_append (GTK_BOX (dir_box), app.out_dir_label);
+  gtk_box_append (GTK_BOX (dir_box), app.out_dir_btn);
+
+  gtk_label_set_ellipsize (GTK_LABEL (app.out_dir_label),
+			   PANGO_ELLIPSIZE_MIDDLE);
+  gtk_widget_set_hexpand (app.out_dir_label, TRUE);
   g_signal_connect (app.start_btn, "clicked", G_CALLBACK (on_start), &app);
   gtk_box_append (GTK_BOX (box), mr);
   gtk_box_append (GTK_BOX (box), add_btn);
   gtk_box_append (GTK_BOX (box), app.progress);
   gtk_box_append (GTK_BOX (box), app.status);
   gtk_box_append (GTK_BOX (box), app.start_btn);
+  gtk_box_insert_child_after (GTK_BOX (box), dir_box, app.list_box);
   gtk_window_present (GTK_WINDOW (win));
   g_main_loop_run (app.loop);
   g_main_loop_unref (app.loop);
