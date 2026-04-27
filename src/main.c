@@ -35,6 +35,13 @@ set_state (AppData *a, gboolean run, const char *t)
   gtk_label_set_text (GTK_LABEL (a->status), t);
 }
 
+static gboolean
+on_batch_finished (gpointer data)
+{
+  g_main_loop_quit ((GMainLoop *) data);
+  return G_SOURCE_REMOVE;
+}
+
 static void *
 worker (void *d)
 {
@@ -57,6 +64,7 @@ worker (void *d)
 	break;
     }
   set_state (a, false, "Done");
+  g_idle_add (on_batch_finished, a->loop);
   return NULL;
 }
 

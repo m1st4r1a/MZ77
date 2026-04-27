@@ -65,7 +65,13 @@ typedef struct
   GMainLoop *loop;
   atomic_int busy, completed, total;
   TaskQueue queue;
+  atomic_bool existing;
 } AppData;
+typedef struct {
+    AppData *app;
+    gboolean run;
+    char msg[32];
+} StateData;
 
 
 typedef struct HashNode {
