@@ -9,8 +9,8 @@
 #include <pthread.h>
 #include <gtk/gtk.h>
 
-#define WINDOW_SIZE 4194304
-#define MAX_MATCH   256
+#define WINDOW_SIZE 4096
+#define MAX_MATCH   258
 #define HT_SIZE     65536
 
 typedef uint8_t  BYTE;
@@ -66,7 +66,7 @@ typedef struct
     atomic_int busy, completed, total;
     TaskQueue queue;
     atomic_bool existing;
-    char out_dir[PATH_MAX];  // <-- ADD THIS
+    char out_dir[PATH_MAX];
 } AppData;
 typedef struct {
     AppData *app;

@@ -6,9 +6,7 @@ void
 HashTable_init (LZHashTable *ht)
 {
   for (uint32_t i = 0; i < HT_SIZE; i++)
-    {
-      ht->buckets[i] = NULL;
-    }
+    ht->buckets[i] = NULL;
 }
 
 void

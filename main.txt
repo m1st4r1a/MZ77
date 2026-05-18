@@ -8,11 +8,9 @@
 #include <pthread.h>
 #include <gtk/gtk.h>
 #include <glib.h>
-#include "antidebugger.h"
 #include "dt.h"
 #include "queue.h"
 #include "lz77.h"
-
 
 static gboolean
 ui_update (gpointer d)
@@ -51,12 +49,10 @@ worker (void *d)
   atomic_store (&a->completed, 0);
   int total = atomic_load (&a->total);
   TaskItem task;
-  clock_t begin = clock ();
   for (int i = 0; i < total; i++)
     {
       if (!queue_pop (&a->queue, &task))
 	break;
-      printf ("Total: %d; Got a task\n", total);
       task.status = STATUS_RUNNING;
       int res;
       if (task.mode == MODE_COMPRESS)
@@ -70,8 +66,6 @@ worker (void *d)
       g_idle_add (ui_update, a);
     }
   set_state (a, false, "Done");
-  clock_t end = clock ();
-  printf ("all done at %f\n", (double) (end - begin));
   g_idle_add (on_batch_finished, a->loop);
   return NULL;
 }
@@ -211,7 +205,6 @@ on_start (GtkButton *btn, AppData *a)
 int
 main (void)
 {
-  check_debugger ();
   gtk_init ();
   AppData app = { 0 };
   app.loop = g_main_loop_new (NULL, FALSE);
